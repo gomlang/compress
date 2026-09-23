@@ -138,7 +138,7 @@ the streaming reader leaves following framing unread.
 
 Archive's DEFLATE/GZIP/ZIP convenience APIs are being migrated through separate
 compatibility adapters in the archive package. The independent
-`../consumers/compress` module checks encoding, GZIP composition, Read
+`../../goml-dev/ecosystem/consumers/compress` module checks encoding, GZIP composition, Read
 composition and preservation of following framing through the isolated
 verification registry.
 
