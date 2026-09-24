@@ -138,11 +138,11 @@ the streaming reader leaves following framing unread.
 
 Archive's DEFLATE/GZIP/ZIP convenience APIs are being migrated through separate
 compatibility adapters in the archive package. The independent
-`../../goml-dev/ecosystem/consumers/compress` module checks encoding, GZIP composition, Read
+`consumer` module checks encoding, GZIP composition, Read
 composition and preservation of following framing through the isolated
 verification registry.
 
-Run `just ecosystem-test compress archive` from the repository root.
+Run `(cd ../verification && just ecosystem-test compress archive)` from this library repository.
 Tests compare Go flate decoding at all supported encoder levels and Go flate
 encoding at representative decoder levels, stored/dynamic/fixed blocks,
 dictionaries larger than the window, overlapping/window-spanning matches,
