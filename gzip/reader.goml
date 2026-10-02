@@ -21,9 +21,21 @@ impl[R: io::Read] io::Read for GzipSource[R] {
     }
 }
 
+pub struct Header {
+    pub modified: u32,
+    pub extra_flags: u8,
+    pub operating_system: u8,
+    pub text: bool,
+    pub extra: Vec[byte],
+    pub name: Vec[byte],
+    pub comment: Vec[byte],
+}
+
 pub struct Reader[R] {
     reader: R,
     limits: Limits,
+    metadata_limit: Option[isize],
+    last_header: Ref[Option[Header]],
     flate: Ref[Option[flate::Decoder[GzipSource[R]]]],
     scratch: Vec[byte],
     table: crc32::Table,
@@ -41,11 +53,30 @@ pub struct Reader[R] {
 
 impl[R: io::Read] Reader[R] {
     pub fn new(reader: R, limits: Limits) -> Result[Reader[R], Error] {
+        Reader::configured(reader, limits, Option::None)
+    }
+
+    pub fn with_metadata(reader: R, limits: Limits, max_metadata_bytes: isize) -> Result[
+        Reader[R],
+        Error,
+    ] {
+        if max_metadata_bytes < 0 {
+            return Result::Err(Error::new(ErrorKind::Limit, 0, "negative GZIP metadata limit"))
+        }
+        Reader::configured(reader, limits, Option::Some(max_metadata_bytes))
+    }
+
+    fn configured(reader: R, limits: Limits, metadata_limit: Option[isize]) -> Result[
+        Reader[R],
+        Error,
+    ] {
         limits.validate()?;
         Result::Ok(
             Reader {
                 reader,
                 limits,
+                metadata_limit,
+                last_header: Ref::new(Option::None),
                 flate: Ref::new(Option::None),
                 scratch: Vec::from_array([0.to_u8()]),
                 table: crc32::Table::new(crc32::IEEE),
@@ -59,6 +90,17 @@ impl[R: io::Read] Reader[R] {
                 phase: Ref::new(0),
                 active: Ref::new(false),
                 failure: Ref::new(Option::None),
+            },
+        )
+    }
+
+    pub fn last_header(self: Reader[R]) -> Option[Header] {
+        self.last_header.get().map(
+            |header| Header {
+                extra: header.extra.copy(),
+                name: header.name.copy(),
+                comment: header.comment.copy(),
+                ..header,
             },
         )
     }
@@ -174,6 +216,28 @@ impl[R: io::Read] Reader[R] {
         Result::Ok(value)
     }
 
+    fn metadata_byte(self: Reader[R], output: Vec[byte], size: Ref[isize], value: byte) -> Result[
+        (),
+        Error,
+    ] {
+        if let Some(limit) = self.metadata_limit {
+            if size.get() >= limit {
+                return Result::Err(
+                    self.fail(
+                        Error::new(
+                            ErrorKind::Limit,
+                            self.input.get() - 1,
+                            "GZIP metadata limit exceeded",
+                        ),
+                    ),
+                )
+            }
+            output.push(value);
+            size.set(size.get() + 1);
+        }
+        Result::Ok(())
+    }
+
     fn header(self: Reader[R]) -> Result[(), Error] {
         let first = match self.byte(self.members.get() > 0)? {
             Some(first) => first,
@@ -207,28 +271,46 @@ impl[R: io::Read] Reader[R] {
                 ),
             )
         }
-        for _ in 0..6 {
-            let _ = self.header_byte(header_crc)?;
+        let mut modified: u32 = 0;
+        for index in 0..4 {
+            modified |= self.header_byte(header_crc)?.to_u32() << (index * 8);
         }
+        let extra_flags = self.header_byte(header_crc)?;
+        let operating_system = self.header_byte(header_crc)?;
+        let extra: Vec[byte] = Vec::new();
+        let name: Vec[byte] = Vec::new();
+        let comment: Vec[byte] = Vec::new();
+        let metadata_size = Ref::new(0);
         if flags & 4 != 0 {
             let low = self.header_byte(header_crc)?.to_isize();
             let high = self.header_byte(header_crc)?.to_isize();
             let length = low | (high << 8);
-            for _ in 0..length {
-                let _ = self.header_byte(header_crc)?;
-            }
-        }
-        if flags & 8 != 0 {
-            loop {
-                if self.header_byte(header_crc)? == 0 {
-                    break
+            if let Some(limit) = self.metadata_limit {
+                if length > limit {
+                    return Result::Err(
+                        self.fail(
+                            Error::new(
+                                ErrorKind::Limit,
+                                self.input.get(),
+                                "GZIP metadata limit exceeded",
+                            ),
+                        ),
+                    )
                 }
             }
+            for _ in 0..length {
+                let value = self.header_byte(header_crc)?;
+                self.metadata_byte(extra, metadata_size, value)?;
+            }
         }
-        if flags & 16 != 0 {
-            loop {
-                if self.header_byte(header_crc)? == 0 {
-                    break
+        for (flag, output) in Vec::from_array([(8.to_u8(), name), (16.to_u8(), comment)]) {
+            if flags & flag != 0 {
+                loop {
+                    let value = self.header_byte(header_crc)?;
+                    if value == 0 {
+                        break
+                    }
+                    self.metadata_byte(output, metadata_size, value)?;
                 }
             }
         }
@@ -245,6 +327,21 @@ impl[R: io::Read] Reader[R] {
                     ),
                 )
             }
+        }
+        if self.metadata_limit.is_some() {
+            self.last_header.set(
+                Option::Some(
+                    Header {
+                        modified,
+                        extra_flags,
+                        operating_system,
+                        text: flags & 1 != 0,
+                        extra,
+                        name,
+                        comment,
+                    },
+                ),
+            );
         }
         let limits = Limits {
             max_input_bytes: self.limits.max_input_bytes - self.input.get(),

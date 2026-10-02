@@ -91,6 +91,26 @@ propagates provider errors. No probe is allowed inside an incomplete member.
 `gzip::decode(Bytes, limits)` follows the same exact-limit behavior. A zero-length
 read does not advance the stream.
 
+`Reader::with_metadata(reader, limits, max_metadata_bytes)` opts into collecting
+header metadata. `last_header()` returns an independent snapshot of the most
+recent completely parsed header (after its optional header CRC passes), or
+`None` before that point and for readers made with `new`. `Header` contains
+`modified` (unsigned Unix seconds; zero means unavailable), `extra_flags`,
+`operating_system`, `text`, and raw `extra`, `name`, and `comment` byte vectors.
+Names and comments use RFC 1952 Latin-1 bytes, not UTF-8; their terminating NULs
+are excluded. Absent and present-empty optional fields both yield empty vectors.
+The nonnegative metadata budget bounds the sum of extra/name/comment bytes per
+member before retaining excess data. Extra lengths are checked before reading
+their payload; a name/comment may consume one byte beyond the metadata budget to
+distinguish its terminator. Framing still consumes the usual input/work budgets.
+During a following header parse, the last accepted header and the new header
+can coexist, each within the per-member metadata budget. Only the latest accepted
+header is retained between calls; empty members
+may be passed in a single read. EOF preserves the last snapshot, as does a later
+header failure. Header availability does not imply payload/trailer validity.
+This API performs no callbacks or I/O when inspecting metadata, and returned
+vectors cannot mutate the reader or previous snapshots.
+
 GZIP uses the same input, output, DEFLATE-block and work budgets as raw DEFLATE.
 Framing bytes also consume input and work budget. Provider errors and invalid
 counts are terminal, aliases share failure state, and reentrancy or unwinding
