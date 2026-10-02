@@ -1,0 +1,33 @@
+package tests;
+
+use ecosystem::compress;
+use ecosystem::compress::gzip;
+use std::bytes;
+use std::io;
+use io::Read;
+use std::testing;
+
+#[test]
+fn downstream_gzip_reader_accepts_its_exact_wire_length() -> () {
+    let limits = compress::Limits {
+        max_input_bytes: 10000,
+        max_output_bytes: 10000,
+        max_blocks: 100,
+        max_work: 1000000,
+    };
+    let wire = testing::expect_ok(
+        gzip::encode(bytes::Bytes::from_string("bounded"), limits, 1),
+        "gzip encode",
+    );
+    let reader = testing::expect_ok(
+        gzip::Reader::new(
+            io::Cursor::new(wire),
+            compress::Limits { max_input_bytes: wire.len(), ..limits },
+        ),
+        "gzip reader",
+    );
+    let output = testing::expect_ok(reader.read_to_end(10000), "exact limit reader");
+    testing::assert(output.to_vec() == b"bounded");
+    testing::assert(reader.is_finished());
+    testing::assert_eq(reader.consumed(), wire.len());
+}

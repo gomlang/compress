@@ -1,0 +1,92 @@
+package tests;
+
+use ecosystem::compress;
+use ecosystem::compress::gzip;
+use std::bytes;
+use std::io;
+use io::Read;
+use std::testing;
+
+struct LimitSource {
+    inner: io::Cursor,
+    calls: Ref[isize],
+}
+
+impl Read for LimitSource {
+    fn read(self: LimitSource, output: MutSlice[u8]) -> Result[isize, io::Error] {
+        self.calls.set(self.calls.get() + 1);
+        self.inner.read(output)
+    }
+}
+
+#[test]
+fn gzip_stream_accepts_exact_input_limit_and_stable_eof() -> () {
+    let sample = bytes::Bytes::from_string("exact GZIP input boundary");
+    let member = testing::expect_ok(gzip::encode(sample, limits(1000000, 1000000), 1), "member");
+    for members in Vec::from_array([1, 2]) {
+        let input = bytes::Bytes::new();
+        for _ in 0..members {
+            input.extend_from_slice(member.as_slice());
+        }
+        let source = LimitSource { inner: io::Cursor::new(input), calls: Ref::new(0) };
+        let reader = testing::expect_ok(
+            gzip::Reader::new(
+                source,
+                compress::Limits {
+                    max_input_bytes: input.len(),
+                    max_output_bytes: sample.len() * members,
+                    ..limits(1000000, 1000000),
+                },
+            ),
+            "reader",
+        );
+        let output = testing::expect_ok(collect(reader, 3), "exact limit EOF");
+        testing::assert_eq(output.len(), sample.len() * members);
+        testing::assert_eq(reader.consumed(), input.len());
+        testing::assert_eq(reader.members(), members);
+        testing::assert(reader.is_finished());
+        let calls = source.calls.get();
+        testing::assert_ok(collect(reader, 3));
+        testing::assert_eq(source.calls.get(), calls);
+    }
+}
+
+#[test]
+fn gzip_exact_limit_probe_rejects_extra_input_and_fuses_the_reader() -> () {
+    let member = testing::expect_ok(
+        gzip::encode(bytes::Bytes::new(), limits(1000000, 1000000), 1),
+        "member",
+    );
+    for extra in Vec::from_array([0.to_u8(), 31.to_u8()]) {
+        let data = member.copy();
+        data.push(extra);
+        let source = LimitSource { inner: io::Cursor::new(data), calls: Ref::new(0) };
+        let reader = testing::expect_ok(
+            gzip::Reader::new(
+                source,
+                compress::Limits { max_input_bytes: member.len(), ..limits(1000000, 1000000) },
+            ),
+            "reader",
+        );
+        let problem = testing::expect_err(collect(reader, 1), "excess input");
+        testing::assert_eq(problem.kind, compress::ErrorKind::Limit);
+        testing::assert_eq(reader.consumed(), member.len());
+        testing::assert_eq(source.inner.position(), member.len() + 1);
+        let calls = source.calls.get();
+        testing::assert_err(collect(reader, 1));
+        testing::assert_eq(source.calls.get(), calls);
+    }
+    let source = LimitSource { inner: io::Cursor::new(member), calls: Ref::new(0) };
+    let reader = testing::expect_ok(
+        gzip::Reader::new(
+            source,
+            compress::Limits { max_input_bytes: member.len() - 1, ..limits(1000000, 1000000) },
+        ),
+        "reader",
+    );
+    testing::assert_eq(
+        testing::expect_err(collect(reader, 1), "incomplete member").kind,
+        compress::ErrorKind::Limit,
+    );
+    testing::assert_eq(source.inner.position(), member.len() - 1);
+}
