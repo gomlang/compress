@@ -83,10 +83,13 @@ each member's trailer before reporting final EOF. `read_chunk`, `consumed`,
 `produced`, `members`, `error` and `is_finished` expose stream state. The reader
 does not retain the entire input or expanded output; header fields are validated
 without materializing them. A caller must read through EOF to validate every
-trailer and reject trailing garbage. A generic reader needs one allowed input
-byte to probe EOF after the final member; `gzip::decode(Bytes, limits)` accepts
-an exact input-byte limit by making that probe internally on its known-length
-cursor. A zero-length read does not advance the stream.
+trailer and reject trailing garbage. After a complete member, the reader may
+probe one byte for EOF even when the input-byte budget is exhausted. EOF succeeds
+at the exact limit; a returned byte fails with `Limit` and is not included in
+`consumed()`. This probe can consume one extra source byte, still costs work, and
+propagates provider errors. No probe is allowed inside an incomplete member.
+`gzip::decode(Bytes, limits)` follows the same exact-limit behavior. A zero-length
+read does not advance the stream.
 
 GZIP uses the same input, output, DEFLATE-block and work budgets as raw DEFLATE.
 Framing bytes also consume input and work budget. Provider errors and invalid

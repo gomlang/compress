@@ -113,9 +113,9 @@ impl[R: io::Read] Reader[R] {
         Result::Ok(())
     }
 
-    fn byte(self: Reader[R]) -> Result[Option[byte], Error] {
+    fn byte(self: Reader[R], probe_eof: bool) -> Result[Option[byte], Error] {
         self.spend()?;
-        if self.input.get() >= self.limits.max_input_bytes {
+        if self.input.get() >= self.limits.max_input_bytes && !probe_eof {
             return Result::Err(
                 self.fail(
                     Error::new(ErrorKind::Limit, self.input.get(), "GZIP input limit exceeded"),
@@ -144,13 +144,20 @@ impl[R: io::Read] Reader[R] {
             self.check()?;
             return Result::Ok(Option::None)
         }
+        if self.input.get() >= self.limits.max_input_bytes {
+            return Result::Err(
+                self.fail(
+                    Error::new(ErrorKind::Limit, self.input.get(), "GZIP input limit exceeded"),
+                ),
+            )
+        }
         self.input.set(self.input.get() + 1);
         self.check()?;
         Result::Ok(Option::Some(self.scratch[0]))
     }
 
     fn required(self: Reader[R]) -> Result[byte, Error] {
-        match self.byte()? {
+        match self.byte(false)? {
             Some(value) => Result::Ok(value),
             None => Result::Err(
                 self.fail(
@@ -168,7 +175,7 @@ impl[R: io::Read] Reader[R] {
     }
 
     fn header(self: Reader[R]) -> Result[(), Error] {
-        let first = match self.byte()? {
+        let first = match self.byte(self.members.get() > 0)? {
             Some(first) => first,
             None => {
                 if self.members.get() > 0 {
@@ -371,17 +378,7 @@ pub fn decode(data: bytes::Bytes, limits: Limits) -> Result[bytes::Bytes, Error]
     if data.len() > limits.max_input_bytes {
         return Result::Err(Error::new(ErrorKind::Limit, 0, "GZIP input limit exceeded"))
     }
-    let internal = Limits {
-        max_input_bytes: if data.len() < 9223372036854775807 {
-            data.len() + 1
-        } else {
-            data.len()
-        },
-        max_output_bytes: limits.max_output_bytes,
-        max_blocks: limits.max_blocks,
-        max_work: limits.max_work,
-    };
-    let reader = Reader::new(io::Cursor::new(data), internal)?;
+    let reader = Reader::new(io::Cursor::new(data), limits)?;
     let output = bytes::Bytes::new();
     let buffer = bytes::Bytes::new();
     for _ in 0..4096 {
