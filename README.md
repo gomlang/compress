@@ -163,7 +163,7 @@ ZLIB reference: [RFC 1950](https://www.rfc-editor.org/rfc/rfc1950).
 
 ## Development and examples
 
-Requires GoML 0.1.55 or newer. The `examples/basic/` example shares the root manifest and its dependencies. From the library root, run:
+Requires GoML 0.1.56 or newer. The `examples/basic/` example shares the root manifest and its dependencies. From the library root, run:
 
 ```sh
 goml run --example basic
