@@ -1,0 +1,192 @@
+package tests;
+
+use ecosystem::compress;
+use ecosystem::compress::gzip;
+use std::bytes;
+use std::hash::crc32;
+use std::io;
+use io::Read;
+use std::panic;
+use std::testing;
+
+fn metadata_limits() -> compress::Limits {
+    compress::Limits {
+        max_input_bytes: 10000,
+        max_output_bytes: 10000,
+        max_blocks: 100,
+        max_work: 1000000,
+    }
+}
+
+fn metadata_member(name: Vec[byte], comment: Vec[byte], extra: Vec[byte], payload: string) -> bytes::Bytes {
+    let base = testing::expect_ok(
+        gzip::encode(bytes::Bytes::from_string(payload), metadata_limits(), 0),
+        "base member",
+    );
+    let output = bytes::Bytes::from_vec(b"\x1f\x8b\x08\x1f\x78\x56\x34\x12\x02\x03");
+    output.push(extra.len().to_u8());
+    output.push((extra.len() >> 8).to_u8());
+    output.extend_from_slice(extra.as_slice());
+    output.extend_from_slice(name.as_slice());
+    output.push(0);
+    output.extend_from_slice(comment.as_slice());
+    output.push(0);
+    let checksum = crc32::checksum(output.as_slice(), crc32::Table::new(crc32::IEEE));
+    output.push(checksum.to_u8());
+    output.push((checksum >> 8).to_u8());
+    output.extend_from_slice(base.slice(10, base.len()));
+    output
+}
+
+#[test]
+fn gzip_metadata_is_bounded_per_member_and_snapshots_are_independent() -> () {
+    let first = metadata_member(b"\xffname", b"note", b"xyz", "a");
+    let second = metadata_member(b"second", b"", b"", "b");
+    let joined = first.copy();
+    joined.extend_from_slice(second.as_slice());
+    let reader = testing::expect_ok(
+        gzip::Reader::with_metadata(io::Cursor::new(joined), metadata_limits(), 12),
+        "metadata reader",
+    );
+    testing::assert(reader.last_header().is_none());
+    let buffer = Vec::from_array([0.to_u8()]);
+    testing::assert_eq(
+        testing::expect_ok(reader.read_chunk(Vec::new().as_mut_slice()), "empty read"),
+        0,
+    );
+    testing::assert(reader.last_header().is_none());
+    testing::assert_eq(
+        testing::expect_ok(reader.read_chunk(buffer.as_mut_slice()), "first byte"),
+        1,
+    );
+    testing::assert_eq(buffer[0], b'a');
+    let header = testing::expect_some(reader.last_header(), "first metadata");
+    testing::assert_eq(header.modified, 0x12345678);
+    testing::assert_eq(header.extra_flags, 2);
+    testing::assert_eq(header.operating_system, 3);
+    testing::assert(header.text);
+    testing::assert(
+        header.name == b"\xffname" && header.comment == b"note" && header.extra == b"xyz",
+    );
+    header.name[0] = 1;
+    testing::assert(testing::expect_some(reader.last_header(), "snapshot").name == b"\xffname");
+    testing::assert_eq(
+        testing::expect_ok(reader.read_chunk(buffer.as_mut_slice()), "second byte"),
+        1,
+    );
+    testing::assert_eq(buffer[0], b'b');
+    testing::assert(testing::expect_some(reader.last_header(), "second metadata").name == b"second");
+    testing::assert(header.comment == b"note");
+    testing::assert_eq(testing::expect_ok(reader.read_chunk(buffer.as_mut_slice()), "EOF"), 0);
+    testing::assert_eq(reader.members(), 2);
+    testing::assert(reader.is_finished());
+    testing::assert(testing::expect_some(reader.last_header(), "EOF metadata").name == b"second");
+    let default_reader = testing::expect_ok(
+        gzip::Reader::new(io::Cursor::new(first), metadata_limits()),
+        "ordinary reader",
+    );
+    testing::expect_ok(default_reader.read_chunk(buffer.as_mut_slice()), "ordinary body");
+    testing::assert(default_reader.last_header().is_none());
+}
+
+#[test]
+fn gzip_metadata_budget_failures_and_bad_header_crc_are_terminal() -> () {
+    let buffer = Vec::from_array([0.to_u8()]);
+    for (name, comment, extra, limit, position) in Vec::from_array(
+        [(b"", b"", b"abcd", 3, 12), (b"abcd", b"", b"", 3, 16), (b"ab", b"cd", b"x", 4, 18)],
+    ) {
+        let wire = metadata_member(name, comment, extra, "body");
+        let source = io::Cursor::new(wire);
+        let reader = testing::expect_ok(
+            gzip::Reader::with_metadata(source, metadata_limits(), limit),
+            "limited metadata",
+        );
+        testing::assert_eq(
+            testing::expect_err(reader.read_chunk(buffer.as_mut_slice()), "metadata limit").kind,
+            compress::ErrorKind::Limit,
+        );
+        testing::assert_eq(source.position(), position);
+        testing::assert(reader.last_header().is_none());
+        testing::assert_err(reader.read_chunk(buffer.as_mut_slice()));
+        testing::assert_eq(source.position(), position);
+    }
+    let empty = metadata_member(b"", b"", b"", "");
+    let reader = testing::expect_ok(
+        gzip::Reader::with_metadata(io::Cursor::new(empty), metadata_limits(), 0),
+        "zero metadata budget",
+    );
+    testing::assert_eq(
+        testing::expect_ok(reader.read_chunk(buffer.as_mut_slice()), "empty member"),
+        0,
+    );
+    testing::assert(reader.last_header().is_some());
+    let first = metadata_member(b"one", b"", b"", "a");
+    let bad = metadata_member(b"two", b"", b"", "b");
+    bad.set(17, bad.get(17) ^ 1);
+    first.extend_from_slice(bad.as_slice());
+    let reader = testing::expect_ok(
+        gzip::Reader::with_metadata(io::Cursor::new(first), metadata_limits(), 3),
+        "bad second header",
+    );
+    testing::expect_ok(reader.read_chunk(buffer.as_mut_slice()), "first payload");
+    testing::assert_eq(
+        testing::expect_err(reader.read_chunk(buffer.as_mut_slice()), "bad CRC").kind,
+        compress::ErrorKind::Checksum,
+    );
+    testing::assert(testing::expect_some(reader.last_header(), "prior header").name == b"one");
+    testing::assert_err(
+        gzip::Reader::with_metadata(io::Cursor::new(bytes::Bytes::new()), metadata_limits(), -1),
+    );
+}
+
+struct MetadataSource {
+    source: io::Cursor,
+    calls: Ref[isize],
+    callback: () -> (),
+}
+
+impl io::Read for MetadataSource {
+    fn read(self: MetadataSource, output: MutSlice[byte]) -> Result[isize, io::Error] {
+        self.calls.set(self.calls.get() + 1);
+        (self.callback)();
+        self.source.read(output)
+    }
+}
+
+#[test]
+fn gzip_metadata_provider_reentry_and_unwind_do_not_publish_partial_headers() -> () {
+    for unwind in Vec::from_array([false, true]) {
+        let callback: Ref[() -> ()] = Ref::new(|| {});
+        let source = MetadataSource {
+            source: io::Cursor::new(metadata_member(b"name", b"comment", b"", "a")),
+            calls: Ref::new(0),
+            callback: || (callback.get())(),
+        };
+        let reader = testing::expect_ok(
+            gzip::Reader::with_metadata(source, metadata_limits(), 20),
+            "callback reader",
+        );
+        let buffer = Vec::from_array([0.to_u8()]);
+        callback.set(
+            || {
+                if source.calls.get() == 14 {
+                    if unwind {
+                        panic::raise("header source panic");
+                    }
+                    let _ = reader.read_chunk(buffer.as_mut_slice());
+                }
+            },
+        );
+        if unwind {
+            testing::assert_err(panic::catch(|| reader.read_chunk(buffer.as_mut_slice())));
+        } else {
+            testing::assert_eq(
+                testing::expect_err(reader.read_chunk(buffer.as_mut_slice()), "reentry").kind,
+                compress::ErrorKind::State,
+            );
+        }
+        testing::assert(reader.last_header().is_none());
+        testing::assert_err(reader.read_chunk(buffer.as_mut_slice()));
+        testing::assert_eq(source.calls.get(), 14);
+    }
+}
