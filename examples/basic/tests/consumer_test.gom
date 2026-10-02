@@ -1,6 +1,6 @@
 package tests;
 
-use consumer::compress;
+use ecosystem::compress::examples::basic as compress;
 
 #[test]
 fn consumes_shared_incremental_deflate() -> () {
