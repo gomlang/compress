@@ -5,6 +5,8 @@ use std::io;
 use ecosystem::compress;
 use compress::{Error, ErrorKind, Limits};
 
+const REVERSED_NIBBLES: [isize; 16] = [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15];
+
 struct EncodeBits {
     data: bytes::Bytes,
     bits: Ref[isize],
@@ -25,11 +27,11 @@ impl EncodeBits {
     }
 
     fn code(self: EncodeBits, value: isize, width: isize) -> () {
-        let mut reversed = 0;
-        for index in 0..width {
-            reversed = (reversed << 1) | ((value >> index) & 1);
-        }
-        self.write(reversed, width);
+        // Fixed-tree literal and distance codes use at most nine bits.
+        let reversed = (REVERSED_NIBBLES[value & 15] << 5)
+            | (REVERSED_NIBBLES[(value >> 4) & 15] << 1)
+            | ((value >> 8) & 1);
+        self.write(reversed >> (9 - width), width);
     }
 
     fn literal(self: EncodeBits, symbol: isize) -> () {

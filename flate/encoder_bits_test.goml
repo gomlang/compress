@@ -1,0 +1,66 @@
+package flate;
+
+use std::bytes;
+use std::hash::crc32;
+use std::testing;
+
+#[test]
+fn fixed_code_bit_order_covers_every_value_and_byte_alignment() -> () {
+    // Python zlib CRC32 vectors: emit each code's bits from most to least
+    // significant, pack successive bits into low-to-high positions in bytes.
+    let expected: [[u32; 8]; 4] = [
+        [
+            2232058153,
+            2815177090,
+            754624827,
+            4078934707,
+            2992042644,
+            2065707062,
+            2775881451,
+            911053025,
+        ],
+        [
+            2350293765,
+            2159307325,
+            1942620510,
+            4203452206,
+            2173703712,
+            3372573987,
+            4263143258,
+            121548055,
+        ],
+        [
+            2843192685,
+            401195665,
+            954866410,
+            1460472632,
+            3942804180,
+            2414816221,
+            306292398,
+            1518707915,
+        ],
+        [1410843342, 1020661823, 916891332, 306557723, 998729975, 2819309451, 251678779, 748816136],
+    ];
+    let widths = [5, 7, 8, 9];
+    let table = crc32::Table::new(crc32::IEEE);
+    for index in 0..4 {
+        let width = widths[index];
+        for prefix in 0..8 {
+            let bits = EncodeBits {
+                data: bytes::Bytes::new(),
+                bits: Ref::new(0),
+                count: Ref::new(0),
+            };
+            bits.write(0x55 & ((1 << prefix) - 1), prefix);
+            for value in 0..1 << width {
+                bits.code(value, width);
+            }
+            bits.align();
+            testing::assert_eq(bits.data.len(), (prefix + (1 << width) * width + 7) / 8);
+            testing::assert_eq(
+                crc32::checksum(bits.data.as_slice(), table),
+                expected[index][prefix],
+            );
+        }
+    }
+}
