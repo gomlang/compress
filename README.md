@@ -50,9 +50,11 @@ input, truncation, limits, I/O and invalid session state, with compressed byte
 offsets and retained provider causes.
 
 `flate::Encoder[W: io::Write]::new(writer, limits, level)` accepts levels -2
-(Huffman-only), -1 (default), and 0 through 9. `with_dictionary` copies the
-final 32 KiB of a preset dictionary. `write_chunk` accepts bounded input in
-32 KiB blocks; `flush` emits a nonfinal synchronization marker; `finish` emits
+(Huffman-only), -1 (default), and 0 through 9. For LZ77 compression,
+`with_dictionary` copies the final 32 KiB of a preset dictionary. Stored and
+Huffman-only modes do not use a dictionary or retain match history.
+`write_chunk` accepts bounded input in 32 KiB blocks; `flush` emits a nonfinal
+synchronization marker; `finish` emits
 the final block and is idempotent after success. Levels 1 through 9 vary LZ77
 search effort. The encoder uses fixed Huffman codes or stored blocks when they
 are smaller; level 0 uses stored blocks. Dynamic Huffman encoding is not

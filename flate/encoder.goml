@@ -103,8 +103,10 @@ impl[W: io::Write] Encoder[W] {
         } else {
             0
         };
-        for index in start..dictionary.len() {
-            history.push(dictionary[index]);
+        if level != 0 && level != -2 {
+            for index in start..dictionary.len() {
+                history.push(dictionary[index]);
+            }
         }
         Result::Ok(
             Encoder {
@@ -255,6 +257,17 @@ impl[W: io::Write] Encoder[W] {
             },
             3,
         );
+        if self.level == -2 {
+            for value in self.pending.as_slice() {
+                self.spend()?;
+                bits.literal(value.to_isize());
+            }
+            bits.literal(256);
+            if final_block {
+                bits.align();
+            }
+            return Result::Ok(())
+        }
         let source = self.history.copy();
         source.extend_from_slice(self.pending.as_slice());
         let heads = empty_heads();
@@ -277,7 +290,7 @@ impl[W: io::Write] Encoder[W] {
             self.spend()?;
             let mut length = 0;
             let mut distance = 0;
-            if self.level != -2 && source.len() - offset >= 3 {
+            if source.len() - offset >= 3 {
                 let mut candidate = heads[encode_hash(source, offset)];
                 let mut attempts = 0;
                 while candidate >= 0 && offset - candidate <= 32768 && attempts < attempts_limit {
@@ -362,15 +375,17 @@ impl[W: io::Write] Encoder[W] {
                 self.bits.count.set(candidate.count.get());
             }
         }
-        let source = self.history.copy();
-        source.extend_from_slice(self.pending.as_slice());
-        let start = if source.len() > 32768 {
-            source.len() - 32768
-        } else {
-            0
-        };
-        self.history.clear();
-        self.history.extend_from_slice(source.slice(start, source.len()));
+        if self.level > 0 {
+            let source = self.history.copy();
+            source.extend_from_slice(self.pending.as_slice());
+            let start = if source.len() > 32768 {
+                source.len() - 32768
+            } else {
+                0
+            };
+            self.history.clear();
+            self.history.extend_from_slice(source.slice(start, source.len()));
+        }
         self.pending.clear();
         self.drain()
     }
