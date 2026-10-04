@@ -8,6 +8,7 @@ use std::io;
 use io::Read;
 use std::testing;
 use std::panic;
+use std::hash::crc32;
 
 #[go_ffi("example.com/goml-ecosystem/compress/testoracle", "Encode")]
 extern fn reference_encode(input: string, dictionary: string, level: isize) -> string;
@@ -254,4 +255,71 @@ fn rejects_provider_faults_and_reentrancy_without_retry() -> () {
         compress::ErrorKind::State,
     );
     testing::assert_eq(source.calls.get(), 1);
+}
+
+#[test]
+fn fixed_code_alphabet_and_reserved_symbols_match_independent_vectors() -> () {
+    // RFC 1951 section 3.2.6 bitstream, decoded independently by Python zlib.
+    // Three blocks start at bits 0, 2 and 3. They exercise all literal/length
+    // and valid distance symbols, including a 32768-byte dictionary distance.
+    let encoded = testing::expect_ok(
+        hex::decode(
+            "6260646266616563e7e0e4e2e6e1e5e3171014121611151397909492969195935750545256515553d7d0d4d2d6d1d5d3"
+                + "3730343236313533b7b0b4b2b6b1b5b37770747276717573f7f0f4f2f6f1f5f30f080c0a0e090d0b8f888c8a8e898d8b"
+                + "4f484c4a4e494d4bcfc8cccacec9cdcb2f282c2a2e292d2bafa8acaaaea9adab6f686c6a6e696d6befe8eceaeee9edeb"
+                + "9f3071d2e42953a74d9f3173d6ec3973e7cd5fb070d1e2254b972d5fb172d5ea356bd7addfb071d3e62d5bb76ddfb173"
+                + "d7ee3d7bf7ed3f70f0d0e123478f1d3f71f2d4e93367cf9dbf70f1d2e52b57af5dbf71f3d6ed3b77efdd7ff0f0d1e327"
+                + "4f9f3d7ff1f2d5eb376fdfbdfff0f1d3e72f5fbf7dfff1f3d7ef3f7ffffd07080840108c20184ac0283803c141124091"
+                + "405380a1018b01382cc0e300021e2022004888003212000519800a05000d2a003a340006a0033008060086c004c03058"
+                + "00300236008c1e0000181000211001319004d24036900f1407ca03d503f503cd07da0f743fd0ffc0f007c63f30fd03f3"
+                + "3fb0fc07d6ffc0f63fb0ff0f1cff07ceff03d7ff03f7ff03cfff07deff0f00",
+        ),
+        "fixed alphabet fixture",
+    );
+    let dictionary = bytes::Bytes::new();
+    for index in 0..32768 {
+        dictionary.push((index % 251).to_u8());
+    }
+    for chunk in[1, 7, 4096] {
+        let decoder = testing::expect_ok(
+            flate::Decoder::with_dictionary(
+                io::Cursor::new(encoded),
+                compress::Limits { max_blocks: 3, ..limits(encoded.len(), 2080) },
+                dictionary.as_slice(),
+            ),
+            "fixed alphabet decoder",
+        );
+        let decoded = testing::expect_ok(collect(decoder, chunk), "all fixed codes");
+        testing::assert_eq(decoded.len(), 2080);
+        testing::assert_eq(
+            crc32::checksum(decoded.as_slice(), crc32::Table::new(crc32::IEEE)),
+            290427047,
+        );
+        testing::assert_eq(decoder.consumed(), encoded.len());
+        testing::assert_eq(decoder.blocks_read(), 3);
+        testing::assert(decoder.is_finished());
+    }
+    for (fixture, message) in[
+        ("1b03", "reserved DEFLATE length symbol"),
+        ("1b07", "reserved DEFLATE length symbol"),
+        ("033e", "reserved DEFLATE distance symbol"),
+        ("037e", "reserved DEFLATE distance symbol"),
+    ] {
+        let encoded = testing::expect_ok(hex::decode(fixture), "reserved fixture");
+        let source = io::Cursor::new(encoded);
+        let decoder = testing::expect_ok(
+            flate::Decoder::new(source, limits(encoded.len(), 3)),
+            "reserved decoder",
+        );
+        let error = testing::expect_err(collect(decoder, 1), "reserved symbol");
+        testing::assert_eq(error.kind, compress::ErrorKind::Invalid);
+        testing::assert_eq(error.message, message);
+        testing::assert_eq(decoder.produced(), 0);
+        let consumed = source.position();
+        testing::assert_eq(
+            testing::expect_err(collect(decoder, 1), "sticky reserved symbol").message,
+            message,
+        );
+        testing::assert_eq(source.position(), consumed);
+    }
 }

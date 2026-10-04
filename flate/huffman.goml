@@ -71,21 +71,29 @@ impl Huffman {
 }
 
 fn fixed_trees() -> Result[(Huffman, Huffman), Error] {
-    let lengths = Vec::new();
-    for symbol in 0..288 {
-        lengths.push(
-            if symbol < 144 {
-                8
-            } else if symbol < 256 {
-                9
-            } else if symbol < 280 {
-                7
-            } else {
-                8
-            },
-        );
+    // RFC 1951 section 3.2.6: canonical order groups symbols by code length.
+    let symbols = Vec::with_capacity(288);
+    for (start, end) in[(256, 280), (0, 144), (280, 288), (144, 256)] {
+        for symbol in start..end {
+            symbols.push(symbol);
+        }
     }
-    Result::Ok((huffman(lengths, true)?, huffman(repeated_numbers(32, 5), true)?))
+    let distances = Vec::with_capacity(32);
+    for symbol in 0..32 {
+        distances.push(symbol);
+    }
+    Result::Ok(
+        (
+            Huffman {
+                counts: Vec::from_array([0, 0, 0, 0, 0, 0, 0, 24, 152, 112, 0, 0, 0, 0, 0, 0]),
+                symbols,
+            },
+            Huffman {
+                counts: Vec::from_array([0, 0, 0, 0, 0, 32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+                symbols: distances,
+            },
+        ),
+    )
 }
 
 fn dynamic_trees[R: io::Read](input: BitReader[R]) -> Result[(Huffman, Huffman), Error] {
