@@ -1,0 +1,241 @@
+package tests;
+
+use ecosystem::compress;
+use ecosystem::compress::gzip;
+use ecosystem::compress::zlib;
+use std::bytes;
+use std::io;
+use io::Read;
+use std::testing;
+
+fn pending_limits(input: isize, output: isize) -> compress::Limits {
+    compress::Limits {
+        max_input_bytes: input,
+        max_output_bytes: output,
+        max_blocks: 100,
+        max_work: 100000,
+    }
+}
+
+struct PendingSource {
+    cursor: io::Cursor,
+    calls: Ref[isize],
+    fault_at: isize,
+}
+
+impl io::Read for PendingSource {
+    fn read(self: PendingSource, output: MutSlice[byte]) -> Result[isize, io::Error] {
+        self.calls.set(self.calls.get() + 1);
+        if self.cursor.position() == self.fault_at {
+            return Result::Err(
+                io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "pending source",
+                    Option::None,
+                    Option::None,
+                    "injected provider failure",
+                ),
+            )
+        }
+        self.cursor.read(output)
+    }
+}
+
+#[test]
+fn gzip_partial_read_exposes_pending_error_and_rejects_empty_reads() -> () {
+    let packed = testing::expect_ok(
+        gzip::encode(bytes::Bytes::from_string("ab"), pending_limits(100, 100), 0),
+        "GZIP fixture",
+    );
+    let source = PendingSource { cursor: io::Cursor::new(packed), calls: Ref::new(0), fault_at: -1 };
+    let reader = testing::expect_ok(
+        gzip::Reader::new(source, pending_limits(100, 1)),
+        "GZIP reader",
+    );
+    let output = bytes::Bytes::from_string("....");
+    testing::assert_eq(testing::expect_ok(reader.read_chunk(output.as_mut_slice()), "prefix"), 1);
+    testing::assert_eq(output.get(0), b'a');
+    testing::assert_eq(reader.produced(), 1);
+    let error = testing::expect_some(reader.error(), "pending failure is already observable");
+    testing::assert_eq(error.kind, compress::ErrorKind::Limit);
+    testing::assert_eq(error.offset, reader.consumed());
+    let calls = source.calls.get();
+    let alias = reader;
+    let empty = bytes::Bytes::new();
+    testing::assert_eq(
+        testing::expect_err(alias.read_chunk(empty.as_mut_slice()), "empty read after failure").kind,
+        error.kind,
+    );
+    testing::assert_eq(
+        testing::expect_err(reader.read_chunk(output.as_mut_slice()), "repeat failure").offset,
+        error.offset,
+    );
+    testing::assert_eq(source.calls.get(), calls);
+    testing::assert(!reader.is_finished());
+}
+
+#[test]
+fn zlib_partial_read_exposes_pending_error_and_rejects_empty_reads() -> () {
+    let packed = testing::expect_ok(
+        zlib::encode(bytes::Bytes::from_string("ab"), pending_limits(100, 100), 0),
+        "ZLIB fixture",
+    );
+    let source = PendingSource { cursor: io::Cursor::new(packed), calls: Ref::new(0), fault_at: -1 };
+    let reader = testing::expect_ok(
+        zlib::Reader::new(source, pending_limits(100, 1)),
+        "ZLIB reader",
+    );
+    let output = bytes::Bytes::from_string("....");
+    testing::assert_eq(testing::expect_ok(reader.read_chunk(output.as_mut_slice()), "prefix"), 1);
+    testing::assert_eq(output.get(0), b'a');
+    testing::assert_eq(reader.produced(), 1);
+    let error = testing::expect_some(reader.error(), "pending failure is already observable");
+    testing::assert_eq(error.kind, compress::ErrorKind::Limit);
+    testing::assert_eq(error.offset, reader.consumed());
+    let calls = source.calls.get();
+    let alias = reader;
+    let empty = bytes::Bytes::new();
+    testing::assert_eq(
+        testing::expect_err(alias.read_chunk(empty.as_mut_slice()), "empty read after failure").kind,
+        error.kind,
+    );
+    testing::assert_eq(
+        testing::expect_err(reader.read_chunk(output.as_mut_slice()), "repeat failure").offset,
+        error.offset,
+    );
+    testing::assert_eq(source.calls.get(), calls);
+    testing::assert(!reader.is_finished());
+}
+
+#[test]
+fn gzip_partial_write_exposes_pending_error_and_rejects_empty_writes() -> () {
+    let output = io::Cursor::new(bytes::Bytes::new());
+    let writer = testing::expect_ok(
+        gzip::Writer::new(output, pending_limits(1, 100), 0),
+        "GZIP writer",
+    );
+    testing::assert_eq(
+        testing::expect_ok(writer.write_chunk(b"ab".as_slice()), "accepted prefix"),
+        1,
+    );
+    testing::assert_eq(writer.accepted(), 1);
+    let error = testing::expect_some(writer.error(), "pending failure is already observable");
+    testing::assert_eq(error.kind, compress::ErrorKind::Limit);
+    testing::assert_eq(error.offset, 1);
+    let length = output.bytes().len();
+    let alias = writer;
+    let empty = bytes::Bytes::new();
+    testing::assert_eq(
+        testing::expect_err(alias.write_chunk(empty.as_slice()), "empty write after failure").kind,
+        error.kind,
+    );
+    testing::assert_eq(
+        testing::expect_err(writer.finish(), "cannot finish failed writer").offset,
+        error.offset,
+    );
+    testing::assert_eq(output.bytes().len(), length);
+    testing::assert_eq(writer.written(), length);
+    testing::assert(!writer.is_finished());
+}
+
+#[test]
+fn zlib_partial_write_exposes_pending_error_and_rejects_empty_writes() -> () {
+    let output = io::Cursor::new(bytes::Bytes::new());
+    let writer = testing::expect_ok(
+        zlib::Writer::new(output, pending_limits(1, 100), 0),
+        "ZLIB writer",
+    );
+    testing::assert_eq(
+        testing::expect_ok(writer.write_chunk(b"ab".as_slice()), "accepted prefix"),
+        1,
+    );
+    testing::assert_eq(writer.accepted(), 1);
+    let error = testing::expect_some(writer.error(), "pending failure is already observable");
+    testing::assert_eq(error.kind, compress::ErrorKind::Limit);
+    testing::assert_eq(error.offset, 1);
+    let length = output.bytes().len();
+    let alias = writer;
+    let empty = bytes::Bytes::new();
+    testing::assert_eq(
+        testing::expect_err(alias.write_chunk(empty.as_slice()), "empty write after failure").kind,
+        error.kind,
+    );
+    testing::assert_eq(
+        testing::expect_err(writer.finish(), "cannot finish failed writer").offset,
+        error.offset,
+    );
+    testing::assert_eq(output.bytes().len(), length);
+    testing::assert_eq(writer.written(), length);
+    testing::assert(!writer.is_finished());
+}
+
+fn expect_pending_provider_error(error: compress::Error, offset: isize) -> () {
+    testing::assert_eq(error.kind, compress::ErrorKind::Io);
+    testing::assert_eq(error.offset, offset);
+    let cause = testing::expect_some(error.cause, "original provider cause");
+    testing::assert_eq(cause.kind(), io::ErrorKind::Interrupted);
+    testing::assert_eq(cause.message(), "injected provider failure");
+}
+
+#[test]
+fn gzip_partial_provider_error_preserves_cause_and_concatenated_member_offset() -> () {
+    let packed = testing::expect_ok(
+        gzip::encode(bytes::Bytes::new(), pending_limits(100, 100), 0),
+        "empty member",
+    );
+    let previous = packed.len();
+    let member = testing::expect_ok(
+        gzip::encode(bytes::Bytes::from_string("ab"), pending_limits(100, 100), 0),
+        "data member",
+    );
+    packed.extend_from_slice(member.as_slice());
+    let fault_at = previous + 10 + 5 + 1;
+    let source = PendingSource { cursor: io::Cursor::new(packed), calls: Ref::new(0), fault_at };
+    let reader = testing::expect_ok(gzip::Reader::new(source, pending_limits(100, 100)), "reader");
+    let output = bytes::Bytes::from_string("....");
+    testing::assert_eq(
+        testing::expect_ok(reader.read_chunk(output.as_mut_slice()), "prefix before failure"),
+        1,
+    );
+    testing::assert_eq(output.get(0), b'a');
+    testing::assert_eq(reader.members(), 1);
+    expect_pending_provider_error(
+        testing::expect_some(reader.error(), "pending provider failure"),
+        fault_at,
+    );
+    let calls = source.calls.get();
+    expect_pending_provider_error(
+        testing::expect_err(reader.read_chunk(output.as_mut_slice()), "repeat failure"),
+        fault_at,
+    );
+    testing::assert_eq(source.calls.get(), calls);
+    testing::assert_eq(reader.consumed(), fault_at);
+}
+
+#[test]
+fn zlib_partial_provider_error_preserves_cause_and_frame_offset() -> () {
+    let packed = testing::expect_ok(
+        zlib::encode(bytes::Bytes::from_string("ab"), pending_limits(100, 100), 0),
+        "data frame",
+    );
+    let fault_at = 2 + 5 + 1;
+    let source = PendingSource { cursor: io::Cursor::new(packed), calls: Ref::new(0), fault_at };
+    let reader = testing::expect_ok(zlib::Reader::new(source, pending_limits(100, 100)), "reader");
+    let output = bytes::Bytes::from_string("....");
+    testing::assert_eq(
+        testing::expect_ok(reader.read_chunk(output.as_mut_slice()), "prefix before failure"),
+        1,
+    );
+    testing::assert_eq(output.get(0), b'a');
+    expect_pending_provider_error(
+        testing::expect_some(reader.error(), "pending provider failure"),
+        fault_at,
+    );
+    let calls = source.calls.get();
+    expect_pending_provider_error(
+        testing::expect_err(reader.read_chunk(output.as_mut_slice()), "repeat failure"),
+        fault_at,
+    );
+    testing::assert_eq(source.calls.get(), calls);
+    testing::assert_eq(reader.consumed(), fault_at);
+}

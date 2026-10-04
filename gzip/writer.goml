@@ -169,6 +169,9 @@ impl[W: io::Write] Writer[W] {
         self.crc.set(crc32::update(self.crc.get(), self.table, input.sub(0, count)));
         self.size.set(self.size.get() + count.to_u32());
         self.check()?;
+        if let Some(error) = self.flate.error() {
+            let _ = self.fail(error);
+        }
         Result::Ok(count)
     }
 

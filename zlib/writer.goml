@@ -215,6 +215,9 @@ impl[W: io::Write] Writer[W] {
         };
         self.checksum.set(adler32::update(self.checksum.get(), input.sub(0, count)));
         self.check()?;
+        if let Some(error) = self.flate.error() {
+            let _ = self.fail(error);
+        }
         Result::Ok(count)
     }
 

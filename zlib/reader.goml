@@ -236,6 +236,17 @@ impl[R: io::Read] Reader[R] {
         Result::Ok(())
     }
 
+    fn fail_body(self: Reader[R], error: Error) -> Error {
+        self.fail(
+            Error {
+                kind: error.kind,
+                offset: self.input.get() + error.offset,
+                message: error.message,
+                cause: error.cause,
+            },
+        )
+    }
+
     fn body(self: Reader[R], output: MutSlice[byte]) -> Result[isize, Error] {
         let Some(decoder) = self.flate.get() else {
             return Result::Err(
@@ -244,20 +255,14 @@ impl[R: io::Read] Reader[R] {
         };
         let count = match decoder.read_chunk(output) {
             Ok(count) => count,
-            Err(error) => return Result::Err(
-                self.fail(
-                    Error {
-                        kind: error.kind,
-                        offset: self.input.get() + error.offset,
-                        message: error.message,
-                        cause: error.cause,
-                    },
-                ),
-            ),
+            Err(error) => return Result::Err(self.fail_body(error)),
         };
         if count > 0 {
             self.checksum.set(adler32::update(self.checksum.get(), output.as_slice().sub(0, count)));
             self.output.set(self.output.get() + count);
+            if let Some(error) = decoder.error() {
+                let _ = self.fail_body(error);
+            }
             return Result::Ok(count)
         }
         self.input.set(self.input.get() + decoder.consumed());

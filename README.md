@@ -116,6 +116,13 @@ Framing bytes also consume input and work budget. Provider errors and invalid
 counts are terminal, aliases share failure state, and reentrancy or unwinding
 poisons the stream. Concurrent alias access is unsupported.
 
+GZIP and ZLIB readers and writers retain a DEFLATE failure detected after partial
+progress immediately: that call returns the completed prefix count, while
+`error()` already exposes the pending failure. Every subsequent operation,
+including an empty read or write, returns the failure without additional I/O.
+Reader error offsets include the enclosing format's consumed header bytes, and
+provider causes are preserved.
+
 ## Incremental ZLIB
 
 `zlib::Writer[W: io::Write]::new(writer, limits, level)` and
