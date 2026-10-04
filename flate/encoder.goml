@@ -516,6 +516,10 @@ impl[W: io::Write] io::Write for Encoder[W] {
     fn write(self: Encoder[W], input: Slice[byte]) -> Result[isize, io::Error] {
         self.write_chunk(input).map_err(|error| error.to_io())
     }
+
+    fn flush(self: Encoder[W]) -> Result[(), io::Error] {
+        Encoder::flush(self).map_err(|error| error.to_io())
+    }
 }
 
 pub fn encode(data: bytes::Bytes, limits: Limits, level: isize) -> Result[bytes::Bytes, Error] {

@@ -58,6 +58,11 @@ search effort. The encoder uses fixed Huffman codes or stored blocks when they
 are smaller; level 0 uses stored blocks. Dynamic Huffman encoding is not
 provided. Encoding does not retain the whole stream.
 
+For DEFLATE, GZIP and ZLIB writers, `std::io::Write::flush` performs the same
+nonfinal synchronization as the inherent `flush` method, including when called
+through a generic writer or `BufWriter`. It retains provider error causes and
+sticky failure state. Call `finish` separately to complete the stream.
+
 `accepted()` counts accepted source bytes and `written()` counts bytes confirmed
 by the underlying writer. A failure after accepting a prefix returns that
 prefix once and becomes sticky; a failure after a partial output write retains

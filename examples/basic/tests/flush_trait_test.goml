@@ -1,0 +1,166 @@
+package tests;
+
+use ecosystem::compress;
+use ecosystem::compress::flate;
+use ecosystem::compress::gzip;
+use ecosystem::compress::zlib;
+use std::bytes;
+use std::io;
+use io::{Read, Write};
+use std::testing;
+
+fn flush_payload() -> bytes::Bytes {
+    bytes::Bytes::from_string("a prefix flushed through a generic writer")
+}
+
+fn flush_buffered[W: io::Write](writer: W, sink: io::Cursor) -> () {
+    let buffered = io::BufWriter::new(writer);
+    testing::assert_ok(buffered.write_all(flush_payload().as_slice()));
+    let before = sink.bytes().len();
+    testing::assert_ok(io::Write::flush(buffered));
+    testing::assert(sink.bytes().len() > before);
+}
+
+fn expect_flush_prefix[R: io::Read](reader: R) -> () {
+    let output = flush_payload().copy();
+    for index in 0..output.len() {
+        output.set(index, 0);
+    }
+    testing::assert_ok(reader.read_exact(output.as_mut_slice()));
+    testing::assert(output.to_vec() == flush_payload().to_vec());
+}
+
+#[test]
+fn flate_trait_flush_publishes_a_nonfinal_prefix_through_bufwriter() -> () {
+    let sink = io::Cursor::new(bytes::Bytes::new());
+    let limits = pending_limits(10000, 10000);
+    let writer = testing::expect_ok(flate::Encoder::new(sink, limits, 6), "writer");
+    flush_buffered(writer, sink);
+    testing::assert(!writer.is_finished());
+    expect_flush_prefix(
+        testing::expect_ok(flate::Decoder::new(io::Cursor::new(sink.bytes()), limits), "reader"),
+    );
+    testing::assert_ok(writer.finish());
+    testing::assert(
+        testing::expect_ok(flate::decode(sink.bytes(), limits), "finished stream").to_vec()
+            == flush_payload().to_vec(),
+    );
+}
+
+#[test]
+fn gzip_trait_flush_publishes_a_nonfinal_prefix_through_bufwriter() -> () {
+    let sink = io::Cursor::new(bytes::Bytes::new());
+    let limits = pending_limits(10000, 10000);
+    let writer = testing::expect_ok(gzip::Writer::new(sink, limits, 6), "writer");
+    flush_buffered(writer, sink);
+    testing::assert(!writer.is_finished());
+    expect_flush_prefix(
+        testing::expect_ok(gzip::Reader::new(io::Cursor::new(sink.bytes()), limits), "reader"),
+    );
+    testing::assert_ok(writer.finish());
+    testing::assert(
+        testing::expect_ok(gzip::decode(sink.bytes(), limits), "finished stream").to_vec()
+            == flush_payload().to_vec(),
+    );
+}
+
+#[test]
+fn zlib_trait_flush_publishes_a_nonfinal_prefix_through_bufwriter() -> () {
+    let sink = io::Cursor::new(bytes::Bytes::new());
+    let limits = pending_limits(10000, 10000);
+    let writer = testing::expect_ok(zlib::Writer::new(sink, limits, 6), "writer");
+    flush_buffered(writer, sink);
+    testing::assert(!writer.is_finished());
+    expect_flush_prefix(
+        testing::expect_ok(zlib::Reader::new(io::Cursor::new(sink.bytes()), limits), "reader"),
+    );
+    testing::assert_ok(writer.finish());
+    testing::assert(
+        testing::expect_ok(zlib::decode(sink.bytes(), limits), "finished stream").to_vec()
+            == flush_payload().to_vec(),
+    );
+}
+
+struct FlushFaultSink {
+    fail: Ref[bool],
+    calls: Ref[isize],
+}
+
+impl io::Write for FlushFaultSink {
+    fn write(self: FlushFaultSink, input: Slice[byte]) -> Result[isize, io::Error] {
+        self.calls.set(self.calls.get() + 1);
+        if self.fail.get() {
+            Result::Err(
+                io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "flush sink",
+                    Option::None,
+                    Option::None,
+                    "injected failure",
+                ),
+            )
+        } else {
+            Result::Ok(input.len())
+        }
+    }
+}
+
+fn fault_sink() -> FlushFaultSink {
+    FlushFaultSink { fail: Ref::new(false), calls: Ref::new(0) }
+}
+
+fn expect_trait_flush_error[W: io::Write](
+    writer: W,
+    sink: FlushFaultSink,
+    state: () -> Option[compress::Error],
+) -> () {
+    testing::assert_ok(writer.write_all(flush_payload().as_slice()));
+    sink.fail.set(true);
+    let before = sink.calls.get();
+    let error = testing::expect_err(io::Write::flush(writer), "generic flush must reach provider");
+    testing::assert_eq(error.kind(), io::ErrorKind::Interrupted);
+    testing::assert_eq(error.operation(), "flush sink");
+    testing::assert(sink.calls.get() > before);
+    let first = testing::expect_some(state(), "sticky compression failure");
+    testing::assert_eq(first.kind, compress::ErrorKind::Io);
+    testing::assert_eq(
+        testing::expect_some(first.cause, "original cause").kind(),
+        io::ErrorKind::Interrupted,
+    );
+    let after = sink.calls.get();
+    testing::assert_eq(
+        testing::expect_err(io::Write::flush(writer), "repeat flush").operation(),
+        "flush sink",
+    );
+    testing::assert_eq(sink.calls.get(), after);
+}
+
+#[test]
+fn flate_trait_flush_preserves_provider_failure_without_retry() -> () {
+    let sink = fault_sink();
+    let writer = testing::expect_ok(
+        flate::Encoder::new(sink, pending_limits(10000, 10000), 6),
+        "writer",
+    );
+    expect_trait_flush_error(writer, sink, || writer.error());
+}
+
+#[test]
+fn gzip_trait_flush_preserves_provider_failure_without_retry() -> () {
+    let sink = fault_sink();
+    let writer = testing::expect_ok(
+        gzip::Writer::new(sink, pending_limits(10000, 10000), 6),
+        "writer",
+    );
+    expect_trait_flush_error(writer, sink, || writer.error());
+}
+
+#[test]
+fn zlib_trait_flush_preserves_provider_failure_without_retry() -> () {
+    let sink = fault_sink();
+    let writer = testing::expect_ok(
+        zlib::Writer::new(sink, pending_limits(10000, 10000), 6),
+        "writer",
+    );
+    expect_trait_flush_error(writer, sink, || writer.error());
+}
