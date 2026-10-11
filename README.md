@@ -179,7 +179,7 @@ checks encoding, GZIP composition, Read composition and preservation of
 following framing. The ecosystem verifier repeats these checks using an isolated
 registry snapshot.
 
-Run `(cd ../verification && just ecosystem-test compress archive)` from this library repository.
+Run `(cd ../workflows && just ecosystem-test compress archive)` from this library repository.
 Tests compare Go flate decoding at all supported encoder levels and Go flate
 encoding at representative decoder levels, stored/dynamic/fixed blocks,
 dictionaries larger than the window, overlapping/window-spanning matches,
@@ -200,12 +200,12 @@ ZLIB reference: [RFC 1950](https://www.rfc-editor.org/rfc/rfc1950).
 
 ## Development and examples
 
-Requires the [current GoML toolchain](https://github.com/gomlang/verification/blob/main/ci/toolchain.json) with unversioned registry support. The `examples/basic/` example shares the root manifest and its dependencies. From the library root, run:
+Requires the [current GoML toolchain](https://github.com/gomlang/workflows/blob/main/ci/toolchain.json) with unversioned registry support. The `examples/basic/` example shares the root manifest and its dependencies. From the library root, run:
 
 ```sh
 goml run --example basic
 goml test
-(cd ../verification && just ecosystem-test compress)
+(cd ../workflows && just ecosystem-test compress)
 ```
 
-`goml test` builds the example and runs its tests. `(cd ../verification && just ecosystem-test compress)` runs the library-specific smoke and compatibility checks.
+`goml test` builds the example and runs its tests. `(cd ../workflows && just ecosystem-test compress)` runs the library-specific smoke and compatibility checks.
