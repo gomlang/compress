@@ -176,7 +176,7 @@ the streaming reader leaves following framing unread.
 Archive's DEFLATE/GZIP/ZIP convenience APIs are being migrated through separate
 compatibility adapters in the archive package. The `examples/basic` example
 checks encoding, GZIP composition, Read composition and preservation of
-following framing. `goml verify` repeats these checks through an isolated
+following framing. The ecosystem verifier repeats these checks using an isolated
 registry snapshot.
 
 Run `(cd ../verification && just ecosystem-test compress archive)` from this library repository.
@@ -200,12 +200,12 @@ ZLIB reference: [RFC 1950](https://www.rfc-editor.org/rfc/rfc1950).
 
 ## Development and examples
 
-Requires GoML 0.1.56 or newer. The `examples/basic/` example shares the root manifest and its dependencies. From the library root, run:
+Requires the [current GoML toolchain](https://github.com/gomlang/verification/blob/main/ci/toolchain.json) with unversioned registry support. The `examples/basic/` example shares the root manifest and its dependencies. From the library root, run:
 
 ```sh
 goml run --example basic
 goml test
-goml verify --timeout 300s
+(cd ../verification && just ecosystem-test compress)
 ```
 
-`goml test` builds the example and runs its tests. `goml verify` repeats the example checks as an independent module against an isolated registry snapshot. `(cd ../verification && just ecosystem-test compress)` also retains the library-specific smoke and compatibility checks.
+`goml test` builds the example and runs its tests. `(cd ../verification && just ecosystem-test compress)` runs the library-specific smoke and compatibility checks.
