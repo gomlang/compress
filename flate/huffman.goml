@@ -53,6 +53,11 @@ fn huffman(lengths: Vec[isize], require_complete: bool) -> Result[Huffman, Error
 
 impl Huffman {
     fn decode[R: io::Read](self: Huffman, input: BitReader[R]) -> Result[isize, Error] {
+        if self.symbols.is_empty() {
+            return Result::Err(
+                failure(ErrorKind::Invalid, input.offset.get(), "empty Huffman alphabet"),
+            )
+        }
         let mut code = 0;
         let mut first = 0;
         let mut index = 0;

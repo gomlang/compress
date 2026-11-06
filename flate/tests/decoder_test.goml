@@ -323,3 +323,39 @@ fn fixed_code_alphabet_and_reserved_symbols_match_independent_vectors() -> () {
         testing::assert_eq(source.position(), consumed);
     }
 }
+
+#[test]
+fn missing_distance_tree_rejects_length_without_reading_following_bytes() -> () {
+    // RFC 1951 section 3.2.7 permits an empty distance alphabet only for literal-only blocks.
+    // These dynamic blocks have one-bit literal codes 256 and 257 and no distance codes.
+    let valid = testing::expect_ok(
+        hex::decode(
+            "0dc001040000000010000000000000000000000000000000000000000000000000000000000000008001",
+        ),
+        "valid fixture",
+    );
+    testing::assert_eq(
+        testing::expect_ok(flate::decode(valid, limits(100, 10)), "empty block").len(),
+        0,
+    );
+    for suffix in["", "aabbccdd"] {
+        let data = testing::expect_ok(
+            hex::decode(
+                "0dc001040000000010000000000000000000000000000000000000000000000000000000000000008005"
+                    + suffix,
+            ),
+            "invalid fixture",
+        );
+        let cursor = io::Cursor::new(data);
+        let decoder = testing::expect_ok(flate::Decoder::new(cursor, limits(100, 10)), "decoder");
+        let error = testing::expect_err(collect(decoder, 1), "missing distance alphabet");
+        testing::assert_eq(error.kind, compress::ErrorKind::Invalid);
+        testing::assert_eq(cursor.position(), 42);
+        testing::assert_eq(decoder.consumed(), 42);
+        testing::assert_eq(
+            testing::expect_err(collect(decoder, 1), "sticky failure").kind,
+            compress::ErrorKind::Invalid,
+        );
+        testing::assert_eq(cursor.position(), 42);
+    }
+}
